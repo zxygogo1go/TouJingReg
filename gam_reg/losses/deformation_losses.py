@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Optional, Sequence, Tuple
 
 import torch
@@ -94,18 +95,33 @@ def jacobian_folding_penalty(
     phi_fwd: torch.Tensor,
     phi_inv: Optional[torch.Tensor] = None,
     minimum_determinant: float = 0.05,
+    tail_fraction: float = 0.001,
+    tail_weight: float = 0.25,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if minimum_determinant < 0.0:
         raise ValueError("minimum_determinant must be non-negative")
+    if tail_fraction < 0.0 or tail_fraction > 1.0:
+        raise ValueError("tail_fraction must be between zero and one")
+    if tail_weight < 0.0:
+        raise ValueError("tail_weight must be non-negative")
 
     transforms = (phi_fwd,) if phi_inv is None else (phi_fwd, phi_inv)
     penalties = []
     folding_ratios = []
     for transform in transforms:
         det = jacobian_determinant(transform)
-        mean_square_violation = torch.relu(float(minimum_determinant) - det).square().mean()
-        eps = mean_square_violation.new_tensor(1.0e-12)
-        penalties.append(torch.sqrt(mean_square_violation + eps) - torch.sqrt(eps))
+        violation = torch.relu(float(minimum_determinant) - det).flatten(start_dim=1)
+        eps = violation.new_tensor(1.0e-12)
+        global_mean_square = violation.square().mean(dim=1)
+        global_rms = torch.sqrt(global_mean_square + eps) - torch.sqrt(eps)
+        penalty = global_rms.mean()
+        if tail_fraction > 0.0 and tail_weight > 0.0:
+            tail_count = max(1, int(math.ceil(violation.shape[1] * tail_fraction)))
+            tail = torch.topk(violation, k=tail_count, dim=1, sorted=False).values
+            tail_mean_square = tail.square().mean(dim=1)
+            tail_rms = torch.sqrt(tail_mean_square + eps) - torch.sqrt(eps)
+            penalty = penalty + float(tail_weight) * tail_rms.mean()
+        penalties.append(penalty)
         folding_ratios.append((det <= 0).to(det.dtype).mean())
 
     penalty = torch.stack(penalties).mean()

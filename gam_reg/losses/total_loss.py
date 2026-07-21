@@ -28,6 +28,8 @@ class TotalRegistrationLoss(nn.Module):
         self.jacobian_minimum_determinant = float(
             cfg["loss"].get("jacobian_minimum_determinant", 0.05)
         )
+        self.jacobian_tail_fraction = float(cfg["loss"].get("jacobian_tail_fraction", 0.001))
+        self.jacobian_tail_weight = float(cfg["loss"].get("jacobian_tail_weight", 0.25))
         variant = cfg.get("model", {}).get("ablation_variant", "full")
         if variant == "full_without_anchor_loss":
             self.weights["anchor"] = 0.0
@@ -66,6 +68,8 @@ class TotalRegistrationLoss(nn.Module):
             phi_fwd,
             phi_inv=phi_inv,
             minimum_determinant=self.jacobian_minimum_determinant,
+            tail_fraction=self.jacobian_tail_fraction,
+            tail_weight=self.jacobian_tail_weight,
         )
         components["dice"] = dice_loss(moving_seg, fixed_seg, phi_inv)
         components["anchor"] = gaussian_anchor_consistency_loss(

@@ -55,8 +55,34 @@ class DeformationLossPrecisionTest(unittest.TestCase):
     def test_jacobian_penalty_uses_rms_not_volume_diluted_mean_square(self):
         phi = identity_grid((8, 9, 10))
         phi[..., 0] = phi[..., 0] * 0.02
-        penalty, _ = jacobian_folding_penalty(phi, minimum_determinant=0.05)
+        penalty, _ = jacobian_folding_penalty(
+            phi,
+            minimum_determinant=0.05,
+            tail_weight=0.0,
+        )
         self.assertAlmostEqual(float(penalty), 0.03, places=5)
+
+    def test_jacobian_tail_penalty_emphasizes_sparse_deep_fold(self):
+        phi = identity_grid((16, 16, 16))
+        phi[:, 8, 8, 8, 0] = -1.0
+        global_only, folding = jacobian_folding_penalty(
+            phi,
+            tail_weight=0.0,
+        )
+        with_tail, _ = jacobian_folding_penalty(
+            phi,
+            tail_fraction=0.001,
+            tail_weight=0.25,
+        )
+        self.assertGreater(float(folding), 0.0)
+        self.assertGreater(float(with_tail), float(global_only) * 2.0)
+
+    def test_jacobian_tail_configuration_is_validated(self):
+        identity = identity_grid((8, 9, 10))
+        with self.assertRaisesRegex(ValueError, "tail_fraction"):
+            jacobian_folding_penalty(identity, tail_fraction=1.1)
+        with self.assertRaisesRegex(ValueError, "tail_weight"):
+            jacobian_folding_penalty(identity, tail_weight=-0.1)
 
     def test_jacobian_penalty_and_metrics_cover_inverse_transform(self):
         identity = identity_grid((8, 9, 10))

@@ -112,7 +112,7 @@ python train.py --stage joint --manifest pairs.csv --resume runs/gam_reg/checkpo
 python train.py --stage registration-warmup --manifest pairs.csv --init-checkpoint runs/synthetic/checkpoints/latest.pt
 ```
 
-During `registration-warmup`, anchor and Jacobian weights ramp from their configured starting values to the target loss weights over `training.stage_schedules.registration-warmup.ramp_steps` successful optimizer steps. Smoothness is computed from physical displacement gradients using `data.spacing_dhw`. The Jacobian safety loss is the RMS hinge violation below `loss.jacobian_minimum_determinant` and constrains both forward and inverse transforms, so sparse folds are not diluted by the full volume size.
+During `registration-warmup`, anchor and Jacobian weights ramp from their configured starting values to the target loss weights over `training.stage_schedules.registration-warmup.ramp_steps` successful optimizer steps. Smoothness is computed from physical displacement gradients using `data.spacing_dhw`. The Jacobian safety loss combines a global RMS hinge with the worst `loss.jacobian_tail_fraction` violations, weighted by `loss.jacobian_tail_weight`, and constrains both forward and inverse transforms. This keeps both widespread compression and sparse deep folds visible to the optimizer.
 
 ## Validation And Inference
 

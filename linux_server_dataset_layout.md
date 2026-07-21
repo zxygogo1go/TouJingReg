@@ -316,7 +316,7 @@ manifests/hanseg/
 - `dataset_summary.json` 记录病例数、pair 数、shape、spacing、标签集合、类别数和 warnings；
 - `dataset_config.yaml` 自动写入 `zero_one`、`target_shape` 和检测到的 `num_anatomy_classes`；
 - `dataset_config.yaml` 同时写入 `spacing_dhw`，供物理坐标 smoothness 使用；
-- Jacobian 安全损失使用低于阈值部分的 RMS，并同时约束正向和逆向形变，避免少量严重折叠被全体素均值稀释；
+- Jacobian 安全损失同时使用全局 RMS 与最差 `0.1%` tail-RMS，并约束正向和逆向形变，避免少量严重折叠被全体素均值稀释；
 - 训练 pair 默认不包含 `case->same case`；只有明确需要恒等样本时才加 `--include-self`。
 
 若先使用骨性二值标签验证链路，应写到独立目录，避免覆盖多类配置：

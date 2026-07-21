@@ -55,6 +55,8 @@ def default_config() -> Dict[str, Any]:
         "loss": {
             "lncc_window": [9, 9, 9],
             "jacobian_minimum_determinant": 0.05,
+            "jacobian_tail_fraction": 0.001,
+            "jacobian_tail_weight": 0.25,
             "weights": {
                 "sim": 1.0,
                 "feature": 0.20,
