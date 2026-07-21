@@ -32,6 +32,17 @@ class DiffeomorphicIntegrationTest(unittest.TestCase):
         det = jacobian_determinant(ident)
         self.assertTrue(torch.allclose(det, torch.ones_like(det), atol=1e-5))
 
+    def test_autocast_zero_velocity_stays_float32_identity(self):
+        shape = (8, 9, 10)
+        velocity = torch.zeros(1, 3, *shape)
+        with torch.amp.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=True):
+            phi_fwd, phi_inv = DiffeomorphicIntegrator(steps=4)(velocity)
+        identity = identity_grid(shape)
+        self.assertEqual(phi_fwd.dtype, torch.float32)
+        self.assertEqual(phi_inv.dtype, torch.float32)
+        self.assertTrue(torch.allclose(phi_fwd, identity, atol=1.0e-6))
+        self.assertTrue(torch.allclose(phi_inv, identity, atol=1.0e-6))
+
 
 if __name__ == "__main__":
     unittest.main()

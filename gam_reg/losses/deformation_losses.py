@@ -9,10 +9,12 @@ def smoothness_loss(velocity: torch.Tensor) -> torch.Tensor:
     """First-order diffusion regularization on normalized xyz velocity."""
     if velocity.ndim != 5 or velocity.shape[1] != 3:
         raise AssertionError("velocity must have shape [B,3,D,H,W]")
-    dz = velocity[:, :, 1:, :, :] - velocity[:, :, :-1, :, :]
-    dy = velocity[:, :, :, 1:, :] - velocity[:, :, :, :-1, :]
-    dx = velocity[:, :, :, :, 1:] - velocity[:, :, :, :, :-1]
-    return (dx.square().mean() + dy.square().mean() + dz.square().mean()) / 3.0
+    with torch.amp.autocast(device_type=velocity.device.type, enabled=False):
+        velocity_f = velocity.float()
+        dz = velocity_f[:, :, 1:, :, :] - velocity_f[:, :, :-1, :, :]
+        dy = velocity_f[:, :, :, 1:, :] - velocity_f[:, :, :, :-1, :]
+        dx = velocity_f[:, :, :, :, 1:] - velocity_f[:, :, :, :, :-1]
+        return (dx.square().mean() + dy.square().mean() + dz.square().mean()) / 3.0
 
 
 def normalized_grid_to_voxel_grid(phi: torch.Tensor) -> torch.Tensor:
@@ -34,12 +36,13 @@ def jacobian_determinant(phi: torch.Tensor) -> torch.Tensor:
         raise AssertionError("phi must have shape [B,D,H,W,3]")
     if min(phi.shape[1:4]) < 3:
         raise ValueError("spatial dimensions must be at least 3 for central differences")
-    vox = normalized_grid_to_voxel_grid(phi)
-    d_dx = (vox[:, 1:-1, 1:-1, 2:, :] - vox[:, 1:-1, 1:-1, :-2, :]) * 0.5
-    d_dy = (vox[:, 1:-1, 2:, 1:-1, :] - vox[:, 1:-1, :-2, 1:-1, :]) * 0.5
-    d_dz = (vox[:, 2:, 1:-1, 1:-1, :] - vox[:, :-2, 1:-1, 1:-1, :]) * 0.5
-    jac = torch.stack((d_dx, d_dy, d_dz), dim=-1)
-    return torch.linalg.det(jac.float()).to(phi.dtype)
+    with torch.amp.autocast(device_type=phi.device.type, enabled=False):
+        vox = normalized_grid_to_voxel_grid(phi.float())
+        d_dx = (vox[:, 1:-1, 1:-1, 2:, :] - vox[:, 1:-1, 1:-1, :-2, :]) * 0.5
+        d_dy = (vox[:, 1:-1, 2:, 1:-1, :] - vox[:, 1:-1, :-2, 1:-1, :]) * 0.5
+        d_dz = (vox[:, 2:, 1:-1, 1:-1, :] - vox[:, :-2, 1:-1, 1:-1, :]) * 0.5
+        jac = torch.stack((d_dx, d_dy, d_dz), dim=-1)
+        return torch.linalg.det(jac)
 
 
 def jacobian_folding_penalty(phi_fwd: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

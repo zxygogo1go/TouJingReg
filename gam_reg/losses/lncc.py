@@ -24,23 +24,26 @@ class LNCCLoss(nn.Module):
     def forward(self, fixed: torch.Tensor, warped_moving: torch.Tensor) -> torch.Tensor:
         if fixed.shape != warped_moving.shape or fixed.ndim != 5:
             raise AssertionError("fixed and warped_moving must both be [B,C,D,H,W] with identical shape")
-        c = fixed.shape[1]
-        filt = torch.ones((c, 1) + self.window, device=fixed.device, dtype=fixed.dtype)
         padding = tuple(k // 2 for k in self.window)
-        win_size = float(self.window[0] * self.window[1] * self.window[2])
+        device_type = fixed.device.type
+        with torch.amp.autocast(device_type=device_type, enabled=False):
+            i = fixed.float()
+            j = warped_moving.float()
 
-        i = fixed
-        j = warped_moving
-        i_sum = F.conv3d(i, filt, padding=padding, groups=c)
-        j_sum = F.conv3d(j, filt, padding=padding, groups=c)
-        i2_sum = F.conv3d(i * i, filt, padding=padding, groups=c)
-        j2_sum = F.conv3d(j * j, filt, padding=padding, groups=c)
-        ij_sum = F.conv3d(i * j, filt, padding=padding, groups=c)
+            def local_mean(value: torch.Tensor) -> torch.Tensor:
+                return F.avg_pool3d(
+                    value,
+                    kernel_size=self.window,
+                    stride=1,
+                    padding=padding,
+                    count_include_pad=True,
+                )
 
-        u_i = i_sum / win_size
-        u_j = j_sum / win_size
-        cross = ij_sum - u_j * i_sum - u_i * j_sum + u_i * u_j * win_size
-        i_var = (i2_sum - 2.0 * u_i * i_sum + u_i.square() * win_size).clamp_min(self.eps)
-        j_var = (j2_sum - 2.0 * u_j * j_sum + u_j.square() * win_size).clamp_min(self.eps)
-        cc = cross.square() / (i_var * j_var + self.eps)
-        return -cc.mean()
+            mean_i = local_mean(i)
+            mean_j = local_mean(j)
+            cross = local_mean(i * j) - mean_i * mean_j
+            i_var = (local_mean(i.square()) - mean_i.square()).clamp_min(0.0)
+            j_var = (local_mean(j.square()) - mean_j.square()).clamp_min(0.0)
+            cc = cross.square() / (i_var * j_var + self.eps)
+            cc = cc.clamp(0.0, 1.0)
+            return -cc.mean()

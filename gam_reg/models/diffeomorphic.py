@@ -20,17 +20,19 @@ class DiffeomorphicIntegrator(nn.Module):
     def integrate_velocity(self, velocity: torch.Tensor) -> torch.Tensor:
         if velocity.ndim != 5 or velocity.shape[1] != 3:
             raise AssertionError("velocity must have shape [B,3,D,H,W] in xyz channel order")
-        b, _, d, h, w = velocity.shape
-        identity = identity_grid(
-            (d, h, w),
-            batch_size=b,
-            device=velocity.device,
-            dtype=velocity.dtype,
-        )
-        phi = identity + velocity.permute(0, 2, 3, 4, 1) / float(2 ** self.steps)
-        for _ in range(self.steps):
-            phi = compose_transforms(phi, phi)
-        return phi
+        with torch.amp.autocast(device_type=velocity.device.type, enabled=False):
+            velocity_f = velocity.float()
+            b, _, d, h, w = velocity_f.shape
+            identity = identity_grid(
+                (d, h, w),
+                batch_size=b,
+                device=velocity_f.device,
+                dtype=torch.float32,
+            )
+            phi = identity + velocity_f.permute(0, 2, 3, 4, 1) / float(2 ** self.steps)
+            for _ in range(self.steps):
+                phi = compose_transforms(phi, phi)
+            return phi
 
     def forward(self, velocity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         phi_fwd = self.integrate_velocity(velocity)

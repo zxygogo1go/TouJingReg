@@ -8,6 +8,7 @@ from typing import Any, Dict
 import torch
 from torch.utils.data import DataLoader
 
+from gam_reg.amp import make_grad_scaler, require_finite
 from gam_reg.config import load_config
 from gam_reg.data.dataset import SyntheticRegistrationDataset, VolumePairDataset
 from gam_reg.losses.total_loss import TotalRegistrationLoss
@@ -76,6 +77,9 @@ def main() -> None:
     if args.target_shape is None:
         args.target_shape = data_cfg.get("target_shape")
     device = torch.device(args.device)
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     model = GAMReg(cfg).to(device)
     loss_fn = TotalRegistrationLoss(cfg).to(device)
     optimizer = torch.optim.AdamW(
@@ -103,7 +107,7 @@ def main() -> None:
         writer = None
 
     use_amp = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = make_grad_scaler(enabled=use_amp)
     model.train()
     output_dir = Path(args.output_dir)
     for epoch in range(start_epoch, int(args.epochs)):
@@ -117,7 +121,11 @@ def main() -> None:
                 batch = next(loader_iter)
             batch = to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            first_update = global_step == 0
+            velocity_head_before = None
+            if first_update:
+                velocity_head_before = model.decoder.velocity_head.weight.detach().clone()
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 outputs = model(batch["moving"], batch["fixed"], batch.get("moving_seg"), batch.get("fixed_seg"), return_debug=True)
                 total, components = loss_fn(
                     outputs,
@@ -126,11 +134,30 @@ def main() -> None:
                     moving_seg=batch.get("moving_seg"),
                     fixed_seg=batch.get("fixed_seg"),
                 )
+            require_finite("total loss", total)
+            for component_name, component_value in components.items():
+                require_finite("loss component %s" % component_name, component_value)
             scaler.scale(total).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"]["gradient_clip_norm"]))
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                float(cfg["training"]["gradient_clip_norm"]),
+            )
+            require_finite("gradient norm", grad_norm)
+            scale_before = float(scaler.get_scale())
             scaler.step(optimizer)
             scaler.update()
+            scale_after = float(scaler.get_scale())
+            if use_amp and scale_after < scale_before:
+                raise FloatingPointError(
+                    "AMP skipped the optimizer step: scale decreased from %g to %g"
+                    % (scale_before, scale_after)
+                )
+            if velocity_head_before is not None and torch.equal(
+                velocity_head_before,
+                model.decoder.velocity_head.weight.detach(),
+            ):
+                raise RuntimeError("optimizer step did not update decoder.velocity_head.weight")
             global_step += 1
             for key, value in components.items():
                 scalar = float(value.detach().cpu())
@@ -138,7 +165,18 @@ def main() -> None:
                 if writer is not None:
                     writer.add_scalar("train/" + key, scalar, global_step)
             if step % 10 == 0:
-                print(json.dumps({"epoch": epoch, "step": step, "loss": float(total.detach().cpu())}))
+                print(
+                    json.dumps(
+                        {
+                            "epoch": epoch,
+                            "step": step,
+                            "loss": float(total.detach().cpu()),
+                            "grad_norm": float(grad_norm.detach().cpu()),
+                            "amp_scale": scale_after,
+                            "optimizer_step_skipped": False,
+                        }
+                    )
+                )
         means = {k: v / float(args.steps_per_epoch) for k, v in running.items()}
         print(json.dumps({"epoch": epoch, "mean": means}, indent=2))
         save_checkpoint(output_dir / "checkpoints" / ("epoch_%03d.pt" % epoch), model, optimizer, epoch, global_step, cfg)

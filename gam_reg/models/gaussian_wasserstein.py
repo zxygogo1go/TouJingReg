@@ -16,7 +16,6 @@ def sqrtm_spd(matrix: torch.Tensor, eps: float = 1.0e-6) -> torch.Tensor:
     return sqrt_matrix.to(matrix.dtype)
 
 
-@torch.cuda.amp.autocast(enabled=False)
 def pairwise_gaussian_w2(
     mu_a: torch.Tensor,
     cov_a: torch.Tensor,
@@ -44,20 +43,21 @@ def pairwise_gaussian_w2(
         raise AssertionError("batch size mismatch")
 
     out_dtype = mu_a.dtype
-    mu_a_f = mu_a.float()
-    mu_b_f = mu_b.float()
-    cov_a_f = cov_a.float()
-    cov_b_f = cov_b.float()
+    with torch.amp.autocast(device_type=mu_a.device.type, enabled=False):
+        mu_a_f = mu_a.float()
+        mu_b_f = mu_b.float()
+        cov_a_f = cov_a.float()
+        cov_b_f = cov_b.float()
 
-    diff = mu_a_f[:, :, None, :] - mu_b_f[:, None, :, :]
-    center_cost = diff.square().sum(dim=-1)
+        diff = mu_a_f[:, :, None, :] - mu_b_f[:, None, :, :]
+        center_cost = diff.square().sum(dim=-1)
 
-    sqrt_a = sqrtm_spd(cov_a_f, eps=eps)
-    inner = sqrt_a[:, :, None] @ cov_b_f[:, None] @ sqrt_a[:, :, None]
-    sqrt_inner = sqrtm_spd(inner, eps=eps)
-    trace_a = cov_a_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1)[:, :, None]
-    trace_b = cov_b_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1)[:, None, :]
-    trace_inner = sqrt_inner.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-    cov_cost = (trace_a + trace_b - 2.0 * trace_inner).clamp_min(0.0)
-    w2_cost = (center_cost + cov_cost).clamp_min(0.0)
-    return center_cost.to(out_dtype), cov_cost.to(out_dtype), w2_cost.to(out_dtype)
+        sqrt_a = sqrtm_spd(cov_a_f, eps=eps)
+        inner = sqrt_a[:, :, None] @ cov_b_f[:, None] @ sqrt_a[:, :, None]
+        sqrt_inner = sqrtm_spd(inner, eps=eps)
+        trace_a = cov_a_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1)[:, :, None]
+        trace_b = cov_b_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1)[:, None, :]
+        trace_inner = sqrt_inner.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+        cov_cost = (trace_a + trace_b - 2.0 * trace_inner).clamp_min(0.0)
+        w2_cost = (center_cost + cov_cost).clamp_min(0.0)
+        return center_cost.to(out_dtype), cov_cost.to(out_dtype), w2_cost.to(out_dtype)
