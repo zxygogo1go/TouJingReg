@@ -23,6 +23,35 @@ def clip_normalize_ct(volume: torch.Tensor, clip_range: Sequence[float] = (-1000
     return 2.0 * (volume - lo) / (hi - lo) - 1.0
 
 
+def normalize_image_intensity(volume: torch.Tensor, mode: str = "hu") -> torch.Tensor:
+    """Normalize an image to the model's expected intensity domain.
+
+    ``hu`` clips raw CT values and maps them to [-1, 1]. ``zero_one`` is
+    intended for preprocessed arrays already normalized to [0, 1].
+    ``minus_one_one`` validates and preserves arrays already in [-1, 1].
+    ``none`` leaves values unchanged for explicitly managed pipelines.
+    """
+    mode = str(mode).lower()
+    volume = volume.float()
+    if mode == "hu":
+        return clip_normalize_ct(volume)
+    if mode == "zero_one":
+        if not torch.isfinite(volume).all():
+            raise ValueError("zero_one image contains non-finite values")
+        if float(volume.min()) < -1.0e-4 or float(volume.max()) > 1.0001:
+            raise ValueError("zero_one image values must lie in [0, 1]")
+        return volume.clamp(0.0, 1.0).mul(2.0).sub(1.0)
+    if mode == "minus_one_one":
+        if not torch.isfinite(volume).all():
+            raise ValueError("minus_one_one image contains non-finite values")
+        if float(volume.min()) < -1.0001 or float(volume.max()) > 1.0001:
+            raise ValueError("minus_one_one image values must lie in [-1, 1]")
+        return volume.clamp(-1.0, 1.0)
+    if mode == "none":
+        return volume
+    raise ValueError("unknown image normalization mode: %s" % mode)
+
+
 def crop_or_pad_3d(volume: torch.Tensor, target_shape: Sequence[int], value: float = 0.0) -> torch.Tensor:
     """Center crop/pad a [C,D,H,W] tensor to target D,H,W."""
     if volume.ndim != 4:

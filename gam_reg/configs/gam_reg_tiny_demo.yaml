@@ -52,3 +52,6 @@ training:
   gradient_clip_norm: 1.0
   amp: false
   batch_size: 1
+data:
+  image_normalization: hu
+  target_shape: null

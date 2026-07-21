@@ -29,6 +29,7 @@ def build_dataset(args, cfg):
         args.manifest,
         data_root=args.data_root,
         num_seg_classes=cfg["model"].get("num_anatomy_classes"),
+        image_normalization=args.image_normalization,
         target_shape=args.target_shape,
     )
 
@@ -61,10 +62,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--synthetic-shape", nargs=3, type=int, default=[32, 40, 32])
     parser.add_argument("--target-shape", nargs=3, type=int)
+    parser.add_argument(
+        "--image-normalization",
+        choices=["hu", "zero_one", "minus_one_one", "none"],
+    )
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     cfg = load_config(args.config)
+    data_cfg = cfg.get("data", {})
+    if args.image_normalization is None:
+        args.image_normalization = data_cfg.get("image_normalization", "hu")
+    if args.target_shape is None:
+        args.target_shape = data_cfg.get("target_shape")
     device = torch.device(args.device)
     model = GAMReg(cfg).to(device)
     loss_fn = TotalRegistrationLoss(cfg).to(device)

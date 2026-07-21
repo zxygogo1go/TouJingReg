@@ -20,6 +20,7 @@ tests/
 train.py
 validate.py
 infer.py
+prepare_dataset.py
 evaluate_ablation.py
 ```
 
@@ -59,9 +60,25 @@ moving,fixed,moving_seg,fixed_seg
 case01_moving.npy,case01_fixed.npy,case01_moving_seg.npy,case01_fixed_seg.npy
 ```
 
-`moving_seg` and `fixed_seg` are optional. Images are expected to be pre-aligned and resampled to identical spacing, orientation, and shape before model input.
+`moving_seg` and `fixed_seg` are optional. Images are expected to be pre-aligned and resampled to identical spacing, orientation, axis order, and shape before model input.
 
 Supported volume formats: `.npy`, `.npz`, `.pt`, `.pth`, `.nii`, `.nii.gz`, `.nrrd`, `.seg.nrrd`.
+
+Raw CT volumes use the default `hu` normalization. Preprocessed arrays already in `[0,1]` must use `--image-normalization zero_one` or set `data.image_normalization: zero_one` in the YAML config.
+
+### Reusing the MUSA server layout
+
+For a dataset organized as `images/`, `seg_o/`, `seg_b/`, `metadata/`, and `lists/paper_split/`, validate it and convert its ID-based splits before training:
+
+```bash
+python prepare_dataset.py \
+  --data-root /root/autodl-tmp/MUSA/data_hanseg \
+  --output-dir manifests/hanseg \
+  --seg-dir seg_o \
+  --expected-shape 160 160 192
+```
+
+This creates train/validation/test manifests, `dataset_summary.json`, and a `dataset_config.yaml` containing the detected anatomy class count and data normalization settings. Review every warning in the summary, especially missing axis-order, orientation, crop-frame, or rigid/affine pre-alignment evidence. See `linux_server_dataset_layout.md` for the complete server workflow.
 
 ## Training
 

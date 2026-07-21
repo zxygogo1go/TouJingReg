@@ -10,10 +10,10 @@ import torch
 from torch.utils.data import Dataset
 
 from gam_reg.data.preprocessing import (
-    clip_normalize_ct,
     crop_or_pad_3d,
     ensure_channel_first,
     labels_to_one_hot,
+    normalize_image_intensity,
 )
 from gam_reg.models.spatial_transformer import identity_grid, spatial_transform
 
@@ -58,6 +58,7 @@ def load_volume(
     is_seg: bool = False,
     num_classes: Optional[int] = None,
     normalize_image: bool = True,
+    image_normalization: str = "hu",
     target_shape: Optional[Sequence[int]] = None,
 ) -> torch.Tensor:
     arr = _load_array(Path(path))
@@ -72,7 +73,7 @@ def load_volume(
         return tensor.float()
     tensor = ensure_channel_first(tensor.float())
     if normalize_image:
-        tensor = clip_normalize_ct(tensor)
+        tensor = normalize_image_intensity(tensor, mode=image_normalization)
     if target_shape is not None:
         tensor = crop_or_pad_3d(tensor, target_shape)
     return tensor.float()
@@ -91,12 +92,14 @@ class VolumePairDataset(Dataset):
         data_root: Optional[str | Path] = None,
         num_seg_classes: Optional[int] = None,
         normalize_images: bool = True,
+        image_normalization: str = "hu",
         target_shape: Optional[Sequence[int]] = None,
     ):
         self.manifest_csv = Path(manifest_csv)
         self.data_root = None if data_root is None else Path(data_root)
         self.num_seg_classes = num_seg_classes
         self.normalize_images = bool(normalize_images)
+        self.image_normalization = str(image_normalization)
         self.target_shape = target_shape
         with self.manifest_csv.open("r", newline="", encoding="utf-8") as f:
             self.rows: List[Dict[str, str]] = list(csv.DictReader(f))
@@ -111,8 +114,18 @@ class VolumePairDataset(Dataset):
         moving_path = _resolve_path(row["moving"], self.data_root)
         fixed_path = _resolve_path(row["fixed"], self.data_root)
         sample: Dict[str, torch.Tensor] = {
-            "moving": load_volume(moving_path, normalize_image=self.normalize_images, target_shape=self.target_shape),
-            "fixed": load_volume(fixed_path, normalize_image=self.normalize_images, target_shape=self.target_shape),
+            "moving": load_volume(
+                moving_path,
+                normalize_image=self.normalize_images,
+                image_normalization=self.image_normalization,
+                target_shape=self.target_shape,
+            ),
+            "fixed": load_volume(
+                fixed_path,
+                normalize_image=self.normalize_images,
+                image_normalization=self.image_normalization,
+                target_shape=self.target_shape,
+            ),
         }
         if row.get("moving_seg") and row.get("fixed_seg"):
             sample["moving_seg"] = load_volume(

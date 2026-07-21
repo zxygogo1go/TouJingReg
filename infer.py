@@ -20,15 +20,31 @@ def main() -> None:
     parser.add_argument("--output-dir", default="outputs/infer")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--save-npy", action="store_true")
+    parser.add_argument("--target-shape", nargs=3, type=int)
+    parser.add_argument(
+        "--image-normalization",
+        choices=["hu", "zero_one", "minus_one_one", "none"],
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    data_cfg = cfg.get("data", {})
+    image_normalization = args.image_normalization or data_cfg.get("image_normalization", "hu")
+    target_shape = args.target_shape or data_cfg.get("target_shape")
     device = torch.device(args.device)
     model = GAMReg(cfg).to(device)
     ckpt = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ckpt["model"])
-    moving = load_volume(args.moving).unsqueeze(0).to(device)
-    fixed = load_volume(args.fixed).unsqueeze(0).to(device)
+    moving = load_volume(
+        args.moving,
+        image_normalization=image_normalization,
+        target_shape=target_shape,
+    ).unsqueeze(0).to(device)
+    fixed = load_volume(
+        args.fixed,
+        image_normalization=image_normalization,
+        target_shape=target_shape,
+    ).unsqueeze(0).to(device)
     model.eval()
     with torch.no_grad():
         outputs = model(moving, fixed, return_debug=False)

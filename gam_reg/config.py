@@ -73,6 +73,10 @@ def default_config() -> Dict[str, Any]:
             "amp": True,
             "batch_size": 1,
         },
+        "data": {
+            "image_normalization": "hu",
+            "target_shape": None,
+        },
     }
 
 

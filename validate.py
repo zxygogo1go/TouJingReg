@@ -29,9 +29,17 @@ def main() -> None:
     parser.add_argument("--max-batches", type=int, default=20)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--target-shape", nargs=3, type=int)
+    parser.add_argument(
+        "--image-normalization",
+        choices=["hu", "zero_one", "minus_one_one", "none"],
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    data_cfg = cfg.get("data", {})
+    image_normalization = args.image_normalization or data_cfg.get("image_normalization", "hu")
+    target_shape = args.target_shape or data_cfg.get("target_shape")
     device = torch.device(args.device)
     model = GAMReg(cfg).to(device)
     if args.checkpoint:
@@ -41,7 +49,13 @@ def main() -> None:
     if args.synthetic or args.manifest is None:
         dataset = SyntheticRegistrationDataset(num_samples=args.max_batches, spatial_shape=(32, 40, 32))
     else:
-        dataset = VolumePairDataset(args.manifest, data_root=args.data_root, num_seg_classes=cfg["model"].get("num_anatomy_classes"))
+        dataset = VolumePairDataset(
+            args.manifest,
+            data_root=args.data_root,
+            num_seg_classes=cfg["model"].get("num_anatomy_classes"),
+            image_normalization=image_normalization,
+            target_shape=target_shape,
+        )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     model.eval()
     sums = {}

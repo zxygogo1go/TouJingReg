@@ -35,13 +35,27 @@ def main() -> None:
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--max-batches", type=int, default=10)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--target-shape", nargs=3, type=int)
+    parser.add_argument(
+        "--image-normalization",
+        choices=["hu", "zero_one", "minus_one_one", "none"],
+    )
     args = parser.parse_args()
 
     base_cfg = load_config(args.config)
+    data_cfg = base_cfg.get("data", {})
+    image_normalization = args.image_normalization or data_cfg.get("image_normalization", "hu")
+    target_shape = args.target_shape or data_cfg.get("target_shape")
     if args.synthetic or args.manifest is None:
         dataset = SyntheticRegistrationDataset(num_samples=args.max_batches, spatial_shape=(32, 40, 32))
     else:
-        dataset = VolumePairDataset(args.manifest, data_root=args.data_root, num_seg_classes=base_cfg["model"].get("num_anatomy_classes"))
+        dataset = VolumePairDataset(
+            args.manifest,
+            data_root=args.data_root,
+            num_seg_classes=base_cfg["model"].get("num_anatomy_classes"),
+            image_normalization=image_normalization,
+            target_shape=target_shape,
+        )
     loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
     device = torch.device(args.device)
     results = {}
