@@ -94,6 +94,7 @@ class VolumePairDataset(Dataset):
         normalize_images: bool = True,
         image_normalization: str = "hu",
         target_shape: Optional[Sequence[int]] = None,
+        spacing_dhw: Sequence[float] = (1.0, 1.0, 1.0),
     ):
         self.manifest_csv = Path(manifest_csv)
         self.data_root = None if data_root is None else Path(data_root)
@@ -101,6 +102,9 @@ class VolumePairDataset(Dataset):
         self.normalize_images = bool(normalize_images)
         self.image_normalization = str(image_normalization)
         self.target_shape = target_shape
+        if len(spacing_dhw) != 3 or any(float(value) <= 0.0 for value in spacing_dhw):
+            raise ValueError("spacing_dhw must contain three positive values")
+        self.spacing_dhw = tuple(float(value) for value in spacing_dhw)
         with self.manifest_csv.open("r", newline="", encoding="utf-8") as f:
             self.rows: List[Dict[str, str]] = list(csv.DictReader(f))
         if not self.rows:
@@ -126,6 +130,7 @@ class VolumePairDataset(Dataset):
                 image_normalization=self.image_normalization,
                 target_shape=self.target_shape,
             ),
+            "spacing_dhw": torch.tensor(self.spacing_dhw, dtype=torch.float32),
         }
         if row.get("moving_seg") and row.get("fixed_seg"):
             sample["moving_seg"] = load_volume(
@@ -181,4 +186,8 @@ class SyntheticRegistrationDataset(Dataset):
         disp = torch.empty(3).uniform_(-self.max_translation, self.max_translation, generator=gen)
         sample_grid = grid + disp.view(1, 1, 1, 1, 3)
         moving = spatial_transform(fixed.unsqueeze(0), sample_grid).squeeze(0)
-        return {"moving": moving.float(), "fixed": fixed.float()}
+        return {
+            "moving": moving.float(),
+            "fixed": fixed.float(),
+            "spacing_dhw": torch.ones(3, dtype=torch.float32),
+        }

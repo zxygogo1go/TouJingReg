@@ -25,6 +25,9 @@ class TotalRegistrationLoss(nn.Module):
             cfg = deep_update(cfg, config)
         self.config = cfg
         self.weights = dict(cfg["loss"]["weights"])
+        self.jacobian_minimum_determinant = float(
+            cfg["loss"].get("jacobian_minimum_determinant", 0.05)
+        )
         variant = cfg.get("model", {}).get("ablation_variant", "full")
         if variant == "full_without_anchor_loss":
             self.weights["anchor"] = 0.0
@@ -39,6 +42,8 @@ class TotalRegistrationLoss(nn.Module):
         moving: Optional[torch.Tensor] = None,
         moving_seg: Optional[torch.Tensor] = None,
         fixed_seg: Optional[torch.Tensor] = None,
+        spacing_dhw: Optional[torch.Tensor] = None,
+        weights_override: Optional[Dict[str, float]] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         warped = outputs["warped_moving"]
         phi_fwd = outputs["phi_fwd"]
@@ -56,8 +61,11 @@ class TotalRegistrationLoss(nn.Module):
             )
         else:
             components["feature"] = velocity.sum() * 0.0
-        components["smooth"] = smoothness_loss(velocity)
-        components["jacobian"], components["folding_ratio"] = jacobian_folding_penalty(phi_fwd)
+        components["smooth"] = smoothness_loss(velocity, spacing_dhw=spacing_dhw)
+        components["jacobian"], components["folding_ratio"] = jacobian_folding_penalty(
+            phi_fwd,
+            minimum_determinant=self.jacobian_minimum_determinant,
+        )
         components["dice"] = dice_loss(moving_seg, fixed_seg, phi_inv)
         components["anchor"] = gaussian_anchor_consistency_loss(
             outputs.get("tokens_moving", {}),
@@ -74,8 +82,11 @@ class TotalRegistrationLoss(nn.Module):
         token_reg = token_reg + token_regularization_loss(outputs.get("tokens_fixed", {})).to(velocity.device)
         components["token_regularization"] = token_reg
 
+        effective_weights = dict(self.weights)
+        if weights_override is not None:
+            effective_weights.update({key: float(value) for key, value in weights_override.items()})
         total = velocity.sum() * 0.0
-        for key, weight in self.weights.items():
+        for key, weight in effective_weights.items():
             total = total + float(weight) * components[key]
         components["total"] = total
         return total, components

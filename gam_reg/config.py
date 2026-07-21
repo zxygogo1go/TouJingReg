@@ -54,6 +54,7 @@ def default_config() -> Dict[str, Any]:
         },
         "loss": {
             "lncc_window": [9, 9, 9],
+            "jacobian_minimum_determinant": 0.05,
             "weights": {
                 "sim": 1.0,
                 "feature": 0.20,
@@ -75,10 +76,18 @@ def default_config() -> Dict[str, Any]:
             "amp_growth_interval": 2000,
             "amp_max_retries": 8,
             "batch_size": 1,
+            "stage_schedules": {
+                "registration-warmup": {
+                    "ramp_steps": 2000,
+                    "anchor_start": 0.1,
+                    "jacobian_start": 0.0,
+                }
+            },
         },
         "data": {
             "image_normalization": "hu",
             "target_shape": None,
+            "spacing_dhw": [1.0, 1.0, 1.0],
         },
     }
 

@@ -76,6 +76,7 @@ class DatasetLayoutTest(unittest.TestCase):
             self.assertEqual(config["model"]["num_anatomy_classes"], 2)
             self.assertEqual(config["data"]["image_normalization"], "zero_one")
             self.assertEqual(config["data"]["target_shape"], [4, 4, 4])
+            self.assertEqual(config["data"]["spacing_dhw"], [2.0, 2.0, 2.0])
 
     def test_prepare_layout_rejects_out_of_range_images(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -106,12 +106,22 @@ Resume:
 python train.py --stage joint --manifest pairs.csv --resume runs/gam_reg/checkpoints/latest.pt
 ```
 
+`--resume` continues the same training stage, including its optimizer and stage-local schedule. To transition between stages, load model weights only:
+
+```bash
+python train.py --stage registration-warmup --manifest pairs.csv --init-checkpoint runs/synthetic/checkpoints/latest.pt
+```
+
+During `registration-warmup`, anchor and Jacobian weights ramp from their configured starting values to the target loss weights over `training.stage_schedules.registration-warmup.ramp_steps` successful optimizer steps. Smoothness is computed from physical displacement gradients using `data.spacing_dhw`.
+
 ## Validation And Inference
 
 ```bash
 python validate.py --checkpoint runs/gam_reg/checkpoints/latest.pt --manifest pairs.csv --data-root /data/han
 python infer.py --checkpoint runs/gam_reg/checkpoints/latest.pt --moving moving.npy --fixed fixed.npy --output-dir outputs/case01 --save-npy
 ```
+
+Validation reports both aggregate and per-pair metrics, including folding ratio, the fraction below the configured safe Jacobian determinant, and the minimum determinant. Use `--output-json path/to/report.json` to save the complete report.
 
 ## Ablations
 

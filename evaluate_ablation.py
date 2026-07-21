@@ -46,6 +46,7 @@ def main() -> None:
     data_cfg = base_cfg.get("data", {})
     image_normalization = args.image_normalization or data_cfg.get("image_normalization", "hu")
     target_shape = args.target_shape or data_cfg.get("target_shape")
+    spacing_dhw = data_cfg.get("spacing_dhw", [1.0, 1.0, 1.0])
     if args.synthetic or args.manifest is None:
         dataset = SyntheticRegistrationDataset(num_samples=args.max_batches, spatial_shape=(32, 40, 32))
     else:
@@ -55,6 +56,7 @@ def main() -> None:
             num_seg_classes=base_cfg["model"].get("num_anatomy_classes"),
             image_normalization=image_normalization,
             target_shape=target_shape,
+            spacing_dhw=spacing_dhw,
         )
     loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
     device = torch.device(args.device)
@@ -78,11 +80,19 @@ def main() -> None:
             for batch in loader:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 outputs = model(batch["moving"], batch["fixed"], batch.get("moving_seg"), batch.get("fixed_seg"), return_debug=True)
-                _, components = loss_fn(outputs, fixed=batch["fixed"], moving=batch["moving"], moving_seg=batch.get("moving_seg"), fixed_seg=batch.get("fixed_seg"))
+                _, components = loss_fn(
+                    outputs,
+                    fixed=batch["fixed"],
+                    moving=batch["moving"],
+                    moving_seg=batch.get("moving_seg"),
+                    fixed_seg=batch.get("fixed_seg"),
+                    spacing_dhw=batch.get("spacing_dhw"),
+                )
                 components["mean_abs_velocity"] = outputs["velocity"].abs().mean()
                 for key, value in components.items():
                     sums[key] = sums.get(key, 0.0) + float(value.detach().cpu())
                 count += 1
+                del outputs, components, batch, value, _
                 if count >= args.max_batches:
                     break
         results[variant] = {k: v / max(count, 1) for k, v in sums.items()}

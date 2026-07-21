@@ -321,6 +321,11 @@ def prepare_layout_manifests(
         "data": {
             "image_normalization": "zero_one",
             "target_shape": summary["shape_dhw"],
+            "spacing_dhw": (
+                summary["target_spacings"][0]
+                if len(summary["target_spacings"]) == 1
+                else [1.0, 1.0, 1.0]
+            ),
         },
     }
     with (output_root / "dataset_config.yaml").open("w", encoding="utf-8") as handle:

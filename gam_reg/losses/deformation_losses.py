@@ -1,19 +1,64 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 import torch
 
 
-def smoothness_loss(velocity: torch.Tensor) -> torch.Tensor:
-    """First-order diffusion regularization on normalized xyz velocity."""
+def _spacing_dhw_tensor(
+    spacing_dhw: Optional[torch.Tensor | Sequence[float]],
+    batch_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if spacing_dhw is None:
+        spacing = torch.ones((batch_size, 3), device=device, dtype=torch.float32)
+    else:
+        spacing = torch.as_tensor(spacing_dhw, device=device, dtype=torch.float32)
+        if spacing.ndim == 1:
+            if spacing.numel() != 3:
+                raise ValueError("spacing_dhw must contain three values")
+            spacing = spacing.view(1, 3).expand(batch_size, 3)
+        elif spacing.ndim == 2 and spacing.shape == (batch_size, 3):
+            pass
+        else:
+            raise ValueError("spacing_dhw must have shape [3] or [B,3]")
+    if not bool(torch.isfinite(spacing).all()) or bool((spacing <= 0).any()):
+        raise ValueError("spacing_dhw values must be finite and positive")
+    return spacing
+
+
+def normalized_velocity_to_physical(
+    velocity: torch.Tensor,
+    spacing_dhw: Optional[torch.Tensor | Sequence[float]] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Convert normalized xyz velocity to millimetres and return DHW spacing."""
     if velocity.ndim != 5 or velocity.shape[1] != 3:
         raise AssertionError("velocity must have shape [B,3,D,H,W]")
     with torch.amp.autocast(device_type=velocity.device.type, enabled=False):
         velocity_f = velocity.float()
-        dz = velocity_f[:, :, 1:, :, :] - velocity_f[:, :, :-1, :, :]
-        dy = velocity_f[:, :, :, 1:, :] - velocity_f[:, :, :, :-1, :]
-        dx = velocity_f[:, :, :, :, 1:] - velocity_f[:, :, :, :, :-1]
+        b, _, d, h, w = velocity_f.shape
+        spacing = _spacing_dhw_tensor(spacing_dhw, b, velocity_f.device)
+        spacing_xyz = spacing.flip(dims=(1,))
+        voxel_scale_xyz = velocity_f.new_tensor(
+            [(w - 1) / 2.0, (h - 1) / 2.0, (d - 1) / 2.0]
+        ).view(1, 3, 1, 1, 1)
+        physical_velocity = velocity_f * voxel_scale_xyz * spacing_xyz.view(b, 3, 1, 1, 1)
+        return physical_velocity, spacing
+
+
+def smoothness_loss(
+    velocity: torch.Tensor,
+    spacing_dhw: Optional[torch.Tensor | Sequence[float]] = None,
+) -> torch.Tensor:
+    """Spacing-aware first-order diffusion on physical displacement gradients."""
+    with torch.amp.autocast(device_type=velocity.device.type, enabled=False):
+        physical_velocity, spacing = normalized_velocity_to_physical(velocity, spacing_dhw)
+        dz = (physical_velocity[:, :, 1:, :, :] - physical_velocity[:, :, :-1, :, :])
+        dz = dz / spacing[:, 0].view(-1, 1, 1, 1, 1)
+        dy = (physical_velocity[:, :, :, 1:, :] - physical_velocity[:, :, :, :-1, :])
+        dy = dy / spacing[:, 1].view(-1, 1, 1, 1, 1)
+        dx = (physical_velocity[:, :, :, :, 1:] - physical_velocity[:, :, :, :, :-1])
+        dx = dx / spacing[:, 2].view(-1, 1, 1, 1, 1)
         return (dx.square().mean() + dy.square().mean() + dz.square().mean()) / 3.0
 
 
@@ -45,8 +90,13 @@ def jacobian_determinant(phi: torch.Tensor) -> torch.Tensor:
         return torch.linalg.det(jac)
 
 
-def jacobian_folding_penalty(phi_fwd: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def jacobian_folding_penalty(
+    phi_fwd: torch.Tensor,
+    minimum_determinant: float = 0.05,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if minimum_determinant < 0.0:
+        raise ValueError("minimum_determinant must be non-negative")
     det = jacobian_determinant(phi_fwd)
-    penalty = torch.relu(-det).square().mean()
+    penalty = torch.relu(float(minimum_determinant) - det).square().mean()
     folding_ratio = (det <= 0).to(det.dtype).mean()
     return penalty, folding_ratio

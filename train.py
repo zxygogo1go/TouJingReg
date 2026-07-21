@@ -13,6 +13,7 @@ from gam_reg.config import load_config
 from gam_reg.data.dataset import SyntheticRegistrationDataset, VolumePairDataset
 from gam_reg.losses.total_loss import TotalRegistrationLoss
 from gam_reg.models.gam_reg import GAMReg
+from gam_reg.training_schedule import stage_loss_weights
 
 
 def to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
@@ -32,10 +33,20 @@ def build_dataset(args, cfg):
         num_seg_classes=cfg["model"].get("num_anatomy_classes"),
         image_normalization=args.image_normalization,
         target_shape=args.target_shape,
+        spacing_dhw=cfg.get("data", {}).get("spacing_dhw", [1.0, 1.0, 1.0]),
     )
 
 
-def save_checkpoint(path: Path, model, optimizer, epoch: int, step: int, cfg: Dict[str, Any]) -> None:
+def save_checkpoint(
+    path: Path,
+    model,
+    optimizer,
+    epoch: int,
+    step: int,
+    stage: str,
+    stage_step: int,
+    cfg: Dict[str, Any],
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -43,6 +54,8 @@ def save_checkpoint(path: Path, model, optimizer, epoch: int, step: int, cfg: Di
             "optimizer": optimizer.state_dict(),
             "epoch": epoch,
             "step": step,
+            "stage": stage,
+            "stage_step": stage_step,
             "config": cfg,
         },
         path,
@@ -57,6 +70,7 @@ def main() -> None:
     parser.add_argument("--data-root")
     parser.add_argument("--output-dir", default="runs/gam_reg")
     parser.add_argument("--resume")
+    parser.add_argument("--init-checkpoint")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--steps-per-epoch", type=int, default=100)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -68,6 +82,8 @@ def main() -> None:
         choices=["hu", "zero_one", "minus_one_one", "none"],
     )
     args = parser.parse_args()
+    if args.resume and args.init_checkpoint:
+        parser.error("--resume and --init-checkpoint are mutually exclusive")
 
     torch.manual_seed(args.seed)
     cfg = load_config(args.config)
@@ -89,12 +105,23 @@ def main() -> None:
     )
     start_epoch = 0
     global_step = 0
+    stage_step = 0
+    if args.init_checkpoint:
+        ckpt = torch.load(args.init_checkpoint, map_location=device)
+        model.load_state_dict(ckpt["model"])
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
+        checkpoint_stage = ckpt.get("stage", args.stage)
+        if checkpoint_stage != args.stage:
+            raise ValueError(
+                "checkpoint stage %s does not match requested stage %s; use --init-checkpoint for stage transitions"
+                % (checkpoint_stage, args.stage)
+            )
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = int(ckpt.get("epoch", 0)) + 1
         global_step = int(ckpt.get("step", 0))
+        stage_step = int(ckpt.get("stage_step", global_step))
 
     dataset = build_dataset(args, cfg)
     loader = DataLoader(dataset, batch_size=int(cfg["training"]["batch_size"]), shuffle=True, num_workers=0)
@@ -117,6 +144,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     for epoch in range(start_epoch, int(args.epochs)):
         running = {}
+        running_weights = {}
         loader_iter = iter(loader)
         for step in range(int(args.steps_per_epoch)):
             try:
@@ -125,6 +153,14 @@ def main() -> None:
                 loader_iter = iter(loader)
                 batch = next(loader_iter)
             batch = to_device(batch, device)
+            effective_weights = stage_loss_weights(
+                loss_fn.weights,
+                stage=args.stage,
+                stage_step=stage_step,
+                training_config=cfg["training"],
+            )
+            if device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(device)
             amp_retries = 0
             while True:
                 optimizer.zero_grad(set_to_none=True)
@@ -146,6 +182,8 @@ def main() -> None:
                         moving=batch["moving"],
                         moving_seg=batch.get("moving_seg"),
                         fixed_seg=batch.get("fixed_seg"),
+                        spacing_dhw=batch.get("spacing_dhw"),
+                        weights_override=effective_weights,
                     )
                 require_finite("total loss", total)
                 for component_name, component_value in components.items():
@@ -183,6 +221,7 @@ def main() -> None:
                             "AMP gradients remained non-finite after %d retries; affected parameters: %s"
                             % (amp_max_retries, ", ".join(bad_gradients[:20]))
                         )
+                    del outputs, total, components, component_value, bad_gradients
                     continue
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -200,12 +239,22 @@ def main() -> None:
                     raise RuntimeError("optimizer step did not update decoder.velocity_head.weight")
                 break
             global_step += 1
+            stage_step += 1
             for key, value in components.items():
                 scalar = float(value.detach().cpu())
                 running[key] = running.get(key, 0.0) + scalar
                 if writer is not None:
                     writer.add_scalar("train/" + key, scalar, global_step)
+            for key, value in effective_weights.items():
+                running_weights[key] = running_weights.get(key, 0.0) + float(value)
+                if writer is not None:
+                    writer.add_scalar("weights/" + key, float(value), global_step)
             if step % 10 == 0:
+                peak_allocated_gib = None
+                peak_reserved_gib = None
+                if device.type == "cuda":
+                    peak_allocated_gib = torch.cuda.max_memory_allocated(device) / float(1024 ** 3)
+                    peak_reserved_gib = torch.cuda.max_memory_reserved(device) / float(1024 ** 3)
                 print(
                     json.dumps(
                         {
@@ -216,13 +265,39 @@ def main() -> None:
                             "amp_scale": scale_after,
                             "amp_retries": amp_retries,
                             "optimizer_step_skipped": False,
+                            "stage": args.stage,
+                            "stage_step": stage_step,
+                            "effective_weights": effective_weights,
+                            "cuda_peak_allocated_gib": peak_allocated_gib,
+                            "cuda_peak_reserved_gib": peak_reserved_gib,
                         }
                     )
                 )
+            optimizer.zero_grad(set_to_none=True)
+            del outputs, total, components, batch, grad_norm, component_value, value
         means = {k: v / float(args.steps_per_epoch) for k, v in running.items()}
-        print(json.dumps({"epoch": epoch, "mean": means}, indent=2))
-        save_checkpoint(output_dir / "checkpoints" / ("epoch_%03d.pt" % epoch), model, optimizer, epoch, global_step, cfg)
-        save_checkpoint(output_dir / "checkpoints" / "latest.pt", model, optimizer, epoch, global_step, cfg)
+        mean_weights = {k: v / float(args.steps_per_epoch) for k, v in running_weights.items()}
+        print(json.dumps({"epoch": epoch, "mean": means, "mean_weights": mean_weights}, indent=2))
+        save_checkpoint(
+            output_dir / "checkpoints" / ("epoch_%03d.pt" % epoch),
+            model,
+            optimizer,
+            epoch,
+            global_step,
+            args.stage,
+            stage_step,
+            cfg,
+        )
+        save_checkpoint(
+            output_dir / "checkpoints" / "latest.pt",
+            model,
+            optimizer,
+            epoch,
+            global_step,
+            args.stage,
+            stage_step,
+            cfg,
+        )
     if writer is not None:
         writer.close()
 

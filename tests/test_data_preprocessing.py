@@ -39,6 +39,7 @@ class ImageNormalizationTest(unittest.TestCase):
             self.assertEqual(tuple(sample["moving"].shape), (1, 4, 4, 4))
             self.assertTrue(torch.allclose(sample["moving"], torch.full((1, 4, 4, 4), -0.5)))
             self.assertTrue(torch.allclose(sample["fixed"], torch.full((1, 4, 4, 4), 0.5)))
+            self.assertTrue(torch.equal(sample["spacing_dhw"], torch.ones(3)))
 
     def test_load_volume_can_preserve_pre_normalized_values(self):
         with tempfile.TemporaryDirectory() as tmp:
