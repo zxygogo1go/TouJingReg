@@ -1,0 +1,7 @@
+torch>=2.0
+numpy>=1.23
+PyYAML>=6.0
+tensorboard>=2.10
+tqdm>=4.64
+nibabel>=5.0
+SimpleITK>=2.3
