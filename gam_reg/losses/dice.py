@@ -20,14 +20,19 @@ def dice_loss(
         raise AssertionError("segmentations must be one-hot tensors [B,K,D,H,W] with identical shape")
     warped = spatial_transform(moving_seg.float(), phi_inv, mode="bilinear", padding_mode="border")
     fixed = fixed_seg.float()
+    moving_presence = moving_seg.float()
     if exclude_background and warped.shape[1] > 1:
         warped = warped[:, 1:]
         fixed = fixed[:, 1:]
-    dims = (0, 2, 3, 4)
+        moving_presence = moving_presence[:, 1:]
+    dims = (2, 3, 4)
     inter = (warped * fixed).sum(dim=dims)
     denom = warped.sum(dim=dims) + fixed.sum(dim=dims)
     dice = (2.0 * inter + eps) / (denom + eps)
-    return 1.0 - dice.mean()
+    available = (moving_presence.sum(dim=dims) > eps) & (fixed.sum(dim=dims) > eps)
+    if not bool(available.any()):
+        return phi_inv.sum() * 0.0
+    return (1.0 - dice)[available].mean()
 
 
 def per_class_dice(

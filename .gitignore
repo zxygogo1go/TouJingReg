@@ -13,3 +13,5 @@ checkpoints/
 *.ckpt
 *.pdf
 HaN-Seg/
+HNTSMRG24_train/
+data_hntsmrg24/

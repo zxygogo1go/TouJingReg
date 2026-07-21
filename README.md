@@ -80,6 +80,21 @@ python prepare_dataset.py \
 
 This creates train/validation/test manifests, `dataset_summary.json`, and a `dataset_config.yaml` containing the detected anatomy class count and data normalization settings. Review every warning in the summary, especially missing axis-order, orientation, crop-frame, or rigid/affine pre-alignment evidence. See `linux_server_dataset_layout.md` for the complete server workflow.
 
+### HNTS-MRG 2024 longitudinal MRI
+
+HNTS-MRG 2024 uses within-patient longitudinal pairs instead of cross-patient Cartesian pairs. The default moving image is original pre-RT T2 MRI after deterministic SimpleITK centered rigid and affine prealignment; the fixed image is mid-RT T2 MRI. The official deformably registered pre-RT volume is retained for QA only. Run a header-only inspection first, then prepare the physical-space-safe arrays:
+
+```bash
+python prepare_hntsmrg24.py --source-root /data/HNTSMRG24_train --inspect-only
+python prepare_hntsmrg24.py \
+  --source-root /data/HNTSMRG24_train \
+  --output-root /data/data_hntsmrg24 \
+  --manifest-dir manifests/hntsmrg24 \
+  --num-workers 2
+```
+
+The default target is `1.5 mm` isotropic with `D,H,W = 128,160,160`. Images are linearly resampled and independently normalized with robust `0.5-99.5%` percentiles; masks use nearest-neighbor interpolation. Every tumor bounding box must fit inside the centered physical ROI. Splits are deterministic, patient-disjoint, and stratified by the mid-RT presence of GTVp/GTVn. Each patient contributes exactly one `rigid/affine pre-RT -> mid-RT` pair. Dice supervision only includes foreground classes present at both timepoints, so true complete response and class-specific response are not treated as impossible registration errors. Unsafe or MI-worsening affine results fall back to the validated rigid transform and are listed in `dataset_summary.json`.
+
 ## Training
 
 Synthetic warm-up smoke training:

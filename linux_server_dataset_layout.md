@@ -376,6 +376,42 @@ python validate.py \
 
 日志中应重点检查总 loss 是否有限、`folding_ratio_metric` 是否接近 0，以及输出是否出现 NaN/Inf。正式实验前还需抽样可视化 moving、fixed、warped moving 的三正交切片，确认方向与配准关系符合预期。
 
+## HNTS-MRG 2024 替代数据管线
+
+旧 HaN-Seg `.npy` 已确认存在跨病例 FOV/crop frame 不一致，不能继续用于当前配准实验。HNTS-MRG 2024 官方训练集每位患者提供原始 pre-RT、mid-RT，以及已经注册到 mid-RT 空间的 pre-RT 图像与 mask。正式 GAM-Reg 管线使用同一患者的原始 pre-RT，经确定性 SimpleITK 刚性+仿射粗配准后作为 moving，mid-RT 作为 fixed；官方 deformable registered pre-RT 仅用于 QA。每位患者只产生一个纵向 pair，不构造跨患者笛卡尔积。官方数据定义见 [Zenodo 11199559](https://zenodo.org/records/11199559)。
+
+先做只读几何预检：
+
+```bash
+python prepare_hntsmrg24.py \
+  --source-root /root/autodl-tmp/HNTSMRG24_train \
+  --inspect-only
+```
+
+再执行完整预处理：
+
+```bash
+python prepare_hntsmrg24.py \
+  --source-root /root/autodl-tmp/HNTSMRG24_train \
+  --output-root /root/autodl-tmp/data_hntsmrg24 \
+  --manifest-dir manifests/hntsmrg24 \
+  --target-spacing 1.5 1.5 1.5 \
+  --target-shape 128 160 160 \
+  --num-workers 2
+```
+
+输出约定：
+
+- `images/*_pre_aligned.npy`：moving，自建刚性/仿射粗配准后的 pre-RT T2；
+- `images/*_mid.npy`：fixed，mid-RT T2；
+- `seg_o/`：`0=background, 1=GTVp, 2=GTVn`；
+- `metadata/*.json`：保存 source/target affine、方向、origin、spacing、归一化参数和标签集合；
+- `manifests/hntsmrg24/{train,val,test}_pairs.csv`：患者级互斥纵向 pair；
+- `dataset_summary.json`：几何预检、标签组合和划分统计；
+- `dataset_config.yaml`：MRI zero-one 加载、3 类 anatomy head、目标 shape/spacing。
+
+官方说明中 mid-RT 空 mask 可表示完全缓解，不是坏数据。Dice 只对两个时点共同存在的前景类别求平均；没有共同肿瘤类别时 Dice 项为零，图像相似性、平滑和双向 Jacobian 约束仍继续优化。
+
 ## 10. 服务器补充完整性检查
 
 复用前先在服务器检查四类文件数量是否一致：
