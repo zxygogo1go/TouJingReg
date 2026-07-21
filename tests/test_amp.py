@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from gam_reg.amp import make_grad_scaler, require_finite
+from gam_reg.amp import make_grad_scaler, nonfinite_gradient_names, require_finite
 
 
 class AmpUtilityTest(unittest.TestCase):
@@ -18,6 +18,17 @@ class AmpUtilityTest(unittest.TestCase):
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.assertRaisesRegex(FloatingPointError, "non-finite test value"):
                 require_finite("test value", torch.tensor(value))
+
+    def test_nonfinite_gradient_names_reports_only_bad_parameters(self):
+        good = torch.nn.Parameter(torch.tensor([1.0]))
+        bad = torch.nn.Parameter(torch.tensor([2.0]))
+        missing = torch.nn.Parameter(torch.tensor([3.0]))
+        good.grad = torch.tensor([0.5])
+        bad.grad = torch.tensor([float("inf")])
+        names = nonfinite_gradient_names(
+            [("good", good), ("bad", bad), ("missing", missing)]
+        )
+        self.assertEqual(names, ["bad"])
 
 
 if __name__ == "__main__":

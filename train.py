@@ -8,7 +8,7 @@ from typing import Any, Dict
 import torch
 from torch.utils.data import DataLoader
 
-from gam_reg.amp import make_grad_scaler, require_finite
+from gam_reg.amp import make_grad_scaler, nonfinite_gradient_names, require_finite
 from gam_reg.config import load_config
 from gam_reg.data.dataset import SyntheticRegistrationDataset, VolumePairDataset
 from gam_reg.losses.total_loss import TotalRegistrationLoss
@@ -107,7 +107,12 @@ def main() -> None:
         writer = None
 
     use_amp = bool(cfg["training"].get("amp", True)) and device.type == "cuda"
-    scaler = make_grad_scaler(enabled=use_amp)
+    scaler = make_grad_scaler(
+        enabled=use_amp,
+        init_scale=float(cfg["training"].get("amp_init_scale", 1024.0)),
+        growth_interval=int(cfg["training"].get("amp_growth_interval", 2000)),
+    )
+    amp_max_retries = int(cfg["training"].get("amp_max_retries", 8))
     model.train()
     output_dir = Path(args.output_dir)
     for epoch in range(start_epoch, int(args.epochs)):
@@ -120,44 +125,80 @@ def main() -> None:
                 loader_iter = iter(loader)
                 batch = next(loader_iter)
             batch = to_device(batch, device)
-            optimizer.zero_grad(set_to_none=True)
-            first_update = global_step == 0
-            velocity_head_before = None
-            if first_update:
-                velocity_head_before = model.decoder.velocity_head.weight.detach().clone()
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                outputs = model(batch["moving"], batch["fixed"], batch.get("moving_seg"), batch.get("fixed_seg"), return_debug=True)
-                total, components = loss_fn(
-                    outputs,
-                    fixed=batch["fixed"],
-                    moving=batch["moving"],
-                    moving_seg=batch.get("moving_seg"),
-                    fixed_seg=batch.get("fixed_seg"),
+            amp_retries = 0
+            while True:
+                optimizer.zero_grad(set_to_none=True)
+                first_update = global_step == 0
+                velocity_head_before = None
+                if first_update:
+                    velocity_head_before = model.decoder.velocity_head.weight.detach().clone()
+                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                    outputs = model(
+                        batch["moving"],
+                        batch["fixed"],
+                        batch.get("moving_seg"),
+                        batch.get("fixed_seg"),
+                        return_debug=True,
+                    )
+                    total, components = loss_fn(
+                        outputs,
+                        fixed=batch["fixed"],
+                        moving=batch["moving"],
+                        moving_seg=batch.get("moving_seg"),
+                        fixed_seg=batch.get("fixed_seg"),
+                    )
+                require_finite("total loss", total)
+                for component_name, component_value in components.items():
+                    require_finite("loss component %s" % component_name, component_value)
+                scaler.scale(total).backward()
+                scaler.unscale_(optimizer)
+                bad_gradients = nonfinite_gradient_names(model.named_parameters())
+                if bad_gradients:
+                    if not use_amp:
+                        raise FloatingPointError(
+                            "non-finite gradients without AMP: %s" % ", ".join(bad_gradients[:20])
+                        )
+                    scale_before = float(scaler.get_scale())
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scale_after = float(scaler.get_scale())
+                    amp_retries += 1
+                    print(
+                        json.dumps(
+                            {
+                                "epoch": epoch,
+                                "step": step,
+                                "event": "amp_backoff",
+                                "retry": amp_retries,
+                                "scale_before": scale_before,
+                                "scale_after": scale_after,
+                                "nonfinite_gradients": bad_gradients[:20],
+                            }
+                        )
+                    )
+                    if scale_after >= scale_before:
+                        raise FloatingPointError("GradScaler did not reduce its scale after gradient overflow")
+                    if amp_retries > amp_max_retries:
+                        raise FloatingPointError(
+                            "AMP gradients remained non-finite after %d retries; affected parameters: %s"
+                            % (amp_max_retries, ", ".join(bad_gradients[:20]))
+                        )
+                    continue
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    float(cfg["training"]["gradient_clip_norm"]),
                 )
-            require_finite("total loss", total)
-            for component_name, component_value in components.items():
-                require_finite("loss component %s" % component_name, component_value)
-            scaler.scale(total).backward()
-            scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                float(cfg["training"]["gradient_clip_norm"]),
-            )
-            require_finite("gradient norm", grad_norm)
-            scale_before = float(scaler.get_scale())
-            scaler.step(optimizer)
-            scaler.update()
-            scale_after = float(scaler.get_scale())
-            if use_amp and scale_after < scale_before:
-                raise FloatingPointError(
-                    "AMP skipped the optimizer step: scale decreased from %g to %g"
-                    % (scale_before, scale_after)
-                )
-            if velocity_head_before is not None and torch.equal(
-                velocity_head_before,
-                model.decoder.velocity_head.weight.detach(),
-            ):
-                raise RuntimeError("optimizer step did not update decoder.velocity_head.weight")
+                require_finite("gradient norm", grad_norm)
+                scaler.step(optimizer)
+                scaler.update()
+                scale_after = float(scaler.get_scale())
+                if velocity_head_before is not None and torch.equal(
+                    velocity_head_before,
+                    model.decoder.velocity_head.weight.detach(),
+                ):
+                    raise RuntimeError("optimizer step did not update decoder.velocity_head.weight")
+                break
             global_step += 1
             for key, value in components.items():
                 scalar = float(value.detach().cpu())
@@ -173,6 +214,7 @@ def main() -> None:
                             "loss": float(total.detach().cpu()),
                             "grad_norm": float(grad_norm.detach().cpu()),
                             "amp_scale": scale_after,
+                            "amp_retries": amp_retries,
                             "optimizer_step_skipped": False,
                         }
                     )

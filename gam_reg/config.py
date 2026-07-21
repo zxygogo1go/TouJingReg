@@ -71,6 +71,9 @@ def default_config() -> Dict[str, Any]:
             "weight_decay": 0.00001,
             "gradient_clip_norm": 1.0,
             "amp": True,
+            "amp_init_scale": 1024.0,
+            "amp_growth_interval": 2000,
+            "amp_max_retries": 8,
             "batch_size": 1,
         },
         "data": {
