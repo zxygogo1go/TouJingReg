@@ -9,6 +9,7 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+import yaml
 
 from gam_reg.data.hntsmrg24 import (
     discover_hntsmrg24_cases,
@@ -191,6 +192,15 @@ class HNTSMRG24PreprocessingTest(unittest.TestCase):
             self.assertTrue(all("pre_aligned" in row["moving"] for row in rows))
             config_text = (manifests / "dataset_config.yaml").read_text(encoding="utf-8")
             self.assertIn("num_anatomy_classes: 3", config_text)
+            config = yaml.safe_load(config_text)
+            self.assertEqual(config["training"]["learning_rate"], 2.0e-5)
+            self.assertEqual(
+                config["training"]["stage_schedules"]["registration-warmup"]["jacobian_start"],
+                5.0,
+            )
+            self.assertEqual(config["loss"]["jacobian_minimum_determinant"], 0.1)
+            self.assertEqual(config["loss"]["jacobian_tail_fraction"], 0.0001)
+            self.assertEqual(config["loss"]["jacobian_tail_weight"], 1.0)
             saved_summary = json.loads((manifests / "dataset_summary.json").read_text())
             self.assertEqual(saved_summary["pair_definition"], summary["pair_definition"])
 

@@ -873,10 +873,24 @@ def prepare_hntsmrg24_dataset(
             "num_anatomy_classes": 3,
         },
         "loss": {
+            "jacobian_minimum_determinant": 0.1,
+            "jacobian_tail_fraction": 0.0001,
+            "jacobian_tail_weight": 1.0,
             "weights": {
                 "dice": 1.0,
                 "anatomy": 0.1,
+                "jacobian": 5.0,
             }
+        },
+        "training": {
+            "learning_rate": 2.0e-5,
+            "stage_schedules": {
+                "registration-warmup": {
+                    "ramp_steps": 2000,
+                    "anchor_start": 0.1,
+                    "jacobian_start": 5.0,
+                }
+            },
         },
         "data": {
             "image_normalization": "zero_one",

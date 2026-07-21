@@ -12,6 +12,7 @@ from gam_reg.config import load_config
 from gam_reg.data.dataset import SyntheticRegistrationDataset, VolumePairDataset
 from gam_reg.losses.total_loss import TotalRegistrationLoss
 from gam_reg.metrics.jacobian_metrics import jacobian_metric_dict
+from gam_reg.metrics.registration_metrics import registration_dice_metric_dict
 from gam_reg.models.gam_reg import GAMReg
 from gam_reg.training_schedule import stage_loss_weights
 
@@ -74,6 +75,7 @@ def main() -> None:
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     model.eval()
     sums = {}
+    metric_counts = {}
     pair_results = []
     count = 0
     with torch.no_grad():
@@ -96,10 +98,19 @@ def main() -> None:
                     phi_inv=outputs["phi_inv"],
                 )
             )
+            if batch.get("moving_seg") is not None and batch.get("fixed_seg") is not None:
+                components.update(
+                    registration_dice_metric_dict(
+                        batch["moving_seg"],
+                        batch["fixed_seg"],
+                        outputs["phi_inv"],
+                    )
+                )
             components["mean_abs_velocity"] = outputs["velocity"].abs().mean()
             pair_metrics = {key: float(value.detach().cpu()) for key, value in components.items()}
             for key, value in components.items():
                 sums[key] = sums.get(key, 0.0) + pair_metrics[key]
+                metric_counts[key] = metric_counts.get(key, 0) + 1
             if hasattr(dataset, "rows"):
                 row = dataset.rows[count]
                 moving_name = row["moving"]
@@ -119,7 +130,13 @@ def main() -> None:
             del outputs, components, batch, value, _
             if count >= args.max_batches:
                 break
-    metrics = {k: v / max(count, 1) for k, v in sums.items()}
+    metrics = {key: value / metric_counts[key] for key, value in sums.items()}
+    if "dice" in metrics:
+        metrics["dice_loss"] = metrics["dice"]
+    metrics["dice_score_valid_pairs"] = metric_counts.get("dice_score_after", 0)
+    for key, value in metric_counts.items():
+        if key.startswith("dice_score_class_") and key.endswith("_after"):
+            metrics[key + "_valid_pairs"] = value
     metrics["mean_pair_minimum_det_j"] = metrics.pop("minimum_det_j", 1.0)
     metrics["max_pair_folding_ratio_metric"] = max(
         (pair["metrics"]["folding_ratio_metric"] for pair in pair_results),
