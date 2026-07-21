@@ -92,11 +92,22 @@ def jacobian_determinant(phi: torch.Tensor) -> torch.Tensor:
 
 def jacobian_folding_penalty(
     phi_fwd: torch.Tensor,
+    phi_inv: Optional[torch.Tensor] = None,
     minimum_determinant: float = 0.05,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if minimum_determinant < 0.0:
         raise ValueError("minimum_determinant must be non-negative")
-    det = jacobian_determinant(phi_fwd)
-    penalty = torch.relu(float(minimum_determinant) - det).square().mean()
-    folding_ratio = (det <= 0).to(det.dtype).mean()
+
+    transforms = (phi_fwd,) if phi_inv is None else (phi_fwd, phi_inv)
+    penalties = []
+    folding_ratios = []
+    for transform in transforms:
+        det = jacobian_determinant(transform)
+        mean_square_violation = torch.relu(float(minimum_determinant) - det).square().mean()
+        eps = mean_square_violation.new_tensor(1.0e-12)
+        penalties.append(torch.sqrt(mean_square_violation + eps) - torch.sqrt(eps))
+        folding_ratios.append((det <= 0).to(det.dtype).mean())
+
+    penalty = torch.stack(penalties).mean()
+    folding_ratio = torch.stack(folding_ratios).max()
     return penalty, folding_ratio

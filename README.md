@@ -112,7 +112,7 @@ python train.py --stage joint --manifest pairs.csv --resume runs/gam_reg/checkpo
 python train.py --stage registration-warmup --manifest pairs.csv --init-checkpoint runs/synthetic/checkpoints/latest.pt
 ```
 
-During `registration-warmup`, anchor and Jacobian weights ramp from their configured starting values to the target loss weights over `training.stage_schedules.registration-warmup.ramp_steps` successful optimizer steps. Smoothness is computed from physical displacement gradients using `data.spacing_dhw`.
+During `registration-warmup`, anchor and Jacobian weights ramp from their configured starting values to the target loss weights over `training.stage_schedules.registration-warmup.ramp_steps` successful optimizer steps. Smoothness is computed from physical displacement gradients using `data.spacing_dhw`. The Jacobian safety loss is the RMS hinge violation below `loss.jacobian_minimum_determinant` and constrains both forward and inverse transforms, so sparse folds are not diluted by the full volume size.
 
 ## Validation And Inference
 
@@ -121,7 +121,7 @@ python validate.py --checkpoint runs/gam_reg/checkpoints/latest.pt --manifest pa
 python infer.py --checkpoint runs/gam_reg/checkpoints/latest.pt --moving moving.npy --fixed fixed.npy --output-dir outputs/case01 --save-npy
 ```
 
-Validation reports both aggregate and per-pair metrics, including folding ratio, the fraction below the configured safe Jacobian determinant, and the minimum determinant. Use `--output-json path/to/report.json` to save the complete report.
+Validation reports both aggregate and per-pair metrics, including folding ratio, the fraction below the configured safe Jacobian determinant, and the minimum determinant. Aggregate topology fields use the worse forward/inverse value, while `forward_*` and `inverse_*` fields retain the directional measurements. Use `--output-json path/to/report.json` to save the complete report.
 
 ## Ablations
 

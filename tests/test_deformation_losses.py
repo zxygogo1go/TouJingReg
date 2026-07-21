@@ -52,6 +52,40 @@ class DeformationLossPrecisionTest(unittest.TestCase):
         self.assertEqual(float(metrics["folding_ratio_metric"]), 0.0)
         self.assertGreater(float(metrics["below_minimum_det_j_ratio"]), 0.99)
 
+    def test_jacobian_penalty_uses_rms_not_volume_diluted_mean_square(self):
+        phi = identity_grid((8, 9, 10))
+        phi[..., 0] = phi[..., 0] * 0.02
+        penalty, _ = jacobian_folding_penalty(phi, minimum_determinant=0.05)
+        self.assertAlmostEqual(float(penalty), 0.03, places=5)
+
+    def test_jacobian_penalty_and_metrics_cover_inverse_transform(self):
+        identity = identity_grid((8, 9, 10))
+        unsafe_inverse = identity.clone()
+        unsafe_inverse[..., 0] = unsafe_inverse[..., 0] * -0.1
+        penalty, folding = jacobian_folding_penalty(
+            identity,
+            phi_inv=unsafe_inverse,
+            minimum_determinant=0.05,
+        )
+        metrics = jacobian_metric_dict(
+            identity,
+            minimum_determinant=0.05,
+            phi_inv=unsafe_inverse,
+        )
+        self.assertGreater(float(penalty), 0.0)
+        self.assertGreater(float(folding), 0.99)
+        self.assertEqual(float(metrics["forward_folding_ratio"]), 0.0)
+        self.assertGreater(float(metrics["inverse_folding_ratio"]), 0.99)
+        self.assertLess(float(metrics["minimum_det_j"]), 0.0)
+
+    def test_identity_jacobian_penalty_has_finite_zero_gradient(self):
+        identity = identity_grid((8, 9, 10)).requires_grad_(True)
+        penalty, _ = jacobian_folding_penalty(identity)
+        penalty.backward()
+        self.assertEqual(float(penalty), 0.0)
+        self.assertIsNotNone(identity.grad)
+        self.assertTrue(torch.isfinite(identity.grad).all())
+
 
 if __name__ == "__main__":
     unittest.main()

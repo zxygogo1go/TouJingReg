@@ -64,6 +64,7 @@ class TotalRegistrationLoss(nn.Module):
         components["smooth"] = smoothness_loss(velocity, spacing_dhw=spacing_dhw)
         components["jacobian"], components["folding_ratio"] = jacobian_folding_penalty(
             phi_fwd,
+            phi_inv=phi_inv,
             minimum_determinant=self.jacobian_minimum_determinant,
         )
         components["dice"] = dice_loss(moving_seg, fixed_seg, phi_inv)

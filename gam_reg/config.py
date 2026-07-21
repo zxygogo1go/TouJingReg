@@ -58,8 +58,8 @@ def default_config() -> Dict[str, Any]:
             "weights": {
                 "sim": 1.0,
                 "feature": 0.20,
-                "smooth": 0.05,
-                "jacobian": 0.10,
+                "smooth": 0.10,
+                "jacobian": 5.0,
                 "dice": 1.0,
                 "anchor": 0.50,
                 "anatomy": 0.10,
@@ -80,7 +80,7 @@ def default_config() -> Dict[str, Any]:
                 "registration-warmup": {
                     "ramp_steps": 2000,
                     "anchor_start": 0.1,
-                    "jacobian_start": 0.0,
+                    "jacobian_start": 0.5,
                 }
             },
         },

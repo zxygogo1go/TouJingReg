@@ -93,6 +93,7 @@ def main() -> None:
                 jacobian_metric_dict(
                     outputs["phi_fwd"],
                     minimum_determinant=loss_fn.jacobian_minimum_determinant,
+                    phi_inv=outputs["phi_inv"],
                 )
             )
             components["mean_abs_velocity"] = outputs["velocity"].abs().mean()
